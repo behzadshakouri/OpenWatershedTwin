@@ -85,6 +85,53 @@ class ValidatorTests(unittest.TestCase):
             self.assertIn("INVALID_TRIGGER_MEMBERS", codes)
             self.assertIn("MISSING_SERVICE_SITE", codes)
 
+    def test_flood_site_reports_malformed_nested_objects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            root = repo / "watersheds" / "Example"
+            service_dir = repo / "services" / "floodmap" / "sites"
+            root.mkdir(parents=True)
+            service_dir.mkdir(parents=True)
+            (root / "sites.json").write_text(json.dumps({
+                "shortrange": {"interval_min": 15, "horizon_h": 24, "processes": 2},
+                "sites": {"gage": {
+                    "trigger": None,
+                    "members": [50],
+                    "links": None,
+                    "service": None,
+                }},
+            }))
+            findings = []
+            validator.check_flood_sites(repo, root, findings)
+            codes = {finding.code for finding in findings}
+            self.assertIn("INVALID_TRIGGER", codes)
+            self.assertIn("INVALID_SITE_LINKS", codes)
+            self.assertIn("INVALID_SERVICE", codes)
+
+    def test_forcing_map_reports_malformed_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "forcing.json"
+            path.write_text(json.dumps({"entries": [
+                {"variable": "precipitation", "targets": None},
+                {"variable": "et0", "targets": []},
+            ]}))
+            findings = []
+            validator.check_forcing_map(path, set(), findings)
+            self.assertIn("INVALID_FORCING_TARGETS", {finding.code for finding in findings})
+
+    def test_model_package_reports_malformed_sections(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "model_package.json").write_text(json.dumps({
+                "observation_dirs": None,
+                "extra_tables": [],
+                "gis": None,
+            }))
+            findings = []
+            validator.check_model_package(root, findings)
+            codes = [finding.code for finding in findings]
+            self.assertEqual(codes.count("INVALID_MODEL_PACKAGE"), 3)
+
     def test_repository_has_no_structural_errors(self):
         repo = Path(__file__).resolve().parents[1]
         errors = [

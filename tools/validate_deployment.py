@@ -112,10 +112,14 @@ def check_forcing_map(path: Path, units: set[str], out: list[Finding]) -> None:
             out.append(Finding("ERROR", "INVALID_FORCING_MAP", str(path), "Expected an 'entries' list"))
         return
     coverage = {"precipitation": set(), "et0": set()}
-    for entry in entries:
+    for index, entry in enumerate(entries):
         if not isinstance(entry, dict) or entry.get("variable") not in coverage:
             continue
-        for target in entry.get("targets", []):
+        targets = entry.get("targets")
+        if not isinstance(targets, list):
+            out.append(Finding("ERROR", "INVALID_FORCING_TARGETS", f"{path}:entries[{index}].targets", "Expected a list"))
+            continue
+        for target in targets:
             match = re.search(r"SC\d+$", str(target.get("source", ""))) if isinstance(target, dict) else None
             if match:
                 coverage[entry["variable"]].add(match.group())
@@ -146,12 +150,24 @@ def check_model_package(root: Path, out: list[Finding]) -> None:
     if not isinstance(package, dict):
         return
     paths = [("model_file", package.get("model_file")), ("templates_dir", package.get("templates_dir"))]
-    paths += [(f"observation_dirs[{i}]", value) for i, value in enumerate(package.get("observation_dirs", []))]
-    paths += [(f"extra_tables.{key}", value) for key, value in package.get("extra_tables", {}).items()]
+    observation_dirs = package.get("observation_dirs", [])
+    if not isinstance(observation_dirs, list):
+        out.append(Finding("ERROR", "INVALID_MODEL_PACKAGE", f"{path}:observation_dirs", "Expected a list"))
+        observation_dirs = []
+    paths += [(f"observation_dirs[{i}]", value) for i, value in enumerate(observation_dirs)]
+    extra_tables = package.get("extra_tables", {})
+    if not isinstance(extra_tables, dict):
+        out.append(Finding("ERROR", "INVALID_MODEL_PACKAGE", f"{path}:extra_tables", "Expected an object"))
+        extra_tables = {}
+    paths += [(f"extra_tables.{key}", value) for key, value in extra_tables.items()]
     for field, value in paths:
         if isinstance(value, str) and Path(value).is_absolute():
             out.append(Finding("WARNING", "NONPORTABLE_PATH", f"{path}:{field}", f"Machine-specific absolute path: {value}"))
-    for field, value in package.get("gis", {}).items():
+    gis = package.get("gis", {})
+    if not isinstance(gis, dict):
+        out.append(Finding("ERROR", "INVALID_MODEL_PACKAGE", f"{path}:gis", "Expected an object"))
+        gis = {}
+    for field, value in gis.items():
         if field == "extra_layers" and isinstance(value, dict):
             for name, layer in value.items():
                 check_reference(root, layer, f"{path}:gis.extra_layers.{name}", "MISSING_GIS", out)
@@ -183,9 +199,15 @@ def check_flood_sites(repo: Path, root: Path, out: list[Finding]) -> None:
             out.append(Finding("ERROR", "INVALID_FLOOD_SITE", location, "Expected an object"))
             continue
         trigger = site.get("trigger", {})
+        if not isinstance(trigger, dict):
+            out.append(Finding("ERROR", "INVALID_TRIGGER", f"{location}.trigger", "Expected an object"))
+            trigger = {}
         links = site.get("links", {})
-        link = trigger.get("link") if isinstance(trigger, dict) else None
-        threshold = trigger.get("threshold_cms") if isinstance(trigger, dict) else None
+        if not isinstance(links, dict):
+            out.append(Finding("ERROR", "INVALID_SITE_LINKS", f"{location}.links", "Expected an object"))
+            links = {}
+        link = trigger.get("link")
+        threshold = trigger.get("threshold_cms")
         if not isinstance(link, str) or link not in links:
             out.append(Finding("ERROR", "UNKNOWN_TRIGGER_LINK", f"{location}.trigger.link", f"Trigger link is absent from sites.{name}.links: {link!r}"))
         if not isinstance(threshold, (int, float)) or threshold <= 0:
@@ -198,7 +220,10 @@ def check_flood_sites(repo: Path, root: Path, out: list[Finding]) -> None:
             out.append(Finding("ERROR", "INVALID_TRIGGER_MEMBERS", f"{location}.members", "Expected unique, increasing percentiles from 0 to 100"))
 
         service = site.get("service", {})
-        service_name = service.get("site") if isinstance(service, dict) else None
+        if not isinstance(service, dict):
+            out.append(Finding("ERROR", "INVALID_SERVICE", f"{location}.service", "Expected an object"))
+            service = {}
+        service_name = service.get("site")
         service_path = repo / "services" / "floodmap" / "sites" / f"{service_name}.json"
         if not isinstance(service_name, str) or not service_name:
             out.append(Finding("ERROR", "MISSING_SERVICE_SITE", f"{location}.service.site", "Expected a flood-service site name"))
@@ -218,7 +243,7 @@ def check_flood_sites(repo: Path, root: Path, out: list[Finding]) -> None:
         else:
             out.append(Finding("ERROR", "INVALID_SERVICE_WINDOW", str(service_path), "Expected a 'window' object"))
 
-        url = service.get("url") if isinstance(service, dict) else None
+        url = service.get("url")
         parsed = urlparse(url) if isinstance(url, str) else None
         if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
             out.append(Finding("ERROR", "INVALID_SERVICE_URL", f"{location}.service.url", "Expected an http(s) URL"))
